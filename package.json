@@ -1,0 +1,12 @@
+{
+  "name": "zhichuan-email-api",
+  "version": "1.0.0",
+  "description": "Email sender API using Gmail SMTP",
+  "main": "api/send-email.js",
+  "scripts": {
+    "start": "node api/send-email.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.7"
+  }
+}
