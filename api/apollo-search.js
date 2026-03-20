@@ -52,9 +52,8 @@ export default async function handler(req, res) {
       for (let page = 1; page <= 3 && contacts.length < maxContacts; page++) {
         const perPage = Math.min(maxContacts - contacts.length + 5, 25);
 
-        // 根据 Apollo API 文档，参数要包含 api_key 在 body 中
+        // Apollo API 要求 api_key 必须放在 X-Api-Key 头部，不能放在 body 中
         const searchBody = {
-          api_key: api_key,
           q_keywords: kw,
           page: page,
           per_page: perPage,
@@ -72,15 +71,16 @@ export default async function handler(req, res) {
 
         let resp, respText;
         try {
-          // Apollo.io 可能有不同版本的端点，我们测试一下
-          const apolloEndpoint = 'https://api.apollo.io/v1/mixed_people/search';
+          // Apollo.io 新的 API 端点
+          const apolloEndpoint = 'https://api.apollo.io/v1/mixed_people/api_search';
           resp = await fetch(apolloEndpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Cache-Control': 'no-cache',
               'Accept': 'application/json',
-              'User-Agent': 'ZhiChuan-Email-API/1.0'
+              'User-Agent': 'ZhiChuan-Email-API/1.0',
+              'X-Api-Key': api_key  // API Key 必须放在这里
             },
             body: JSON.stringify(searchBody),
             timeout: 15000
