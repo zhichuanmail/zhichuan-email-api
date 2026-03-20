@@ -1,4 +1,4 @@
-// apollo-search.js — 直川传感器意向客户搜索云函数
+// apollo-search.js — 直川传感器意向客户搜索云函数（简化版）
 // 部署到 Vercel，端点：/api/apollo-search
 
 export default async function handler(req, res) {
@@ -116,91 +116,48 @@ export default async function handler(req, res) {
 
         if (people.length === 0) break; // 该关键词无更多结果
 
-        // 分批获取邮箱信息
-        const batchSize = 3;
-        for (let i = 0; i < people.length && contacts.length < maxContacts; i += batchSize) {
-          const batch = people.slice(i, i + batchSize);
-          
-          // 尝试获取邮箱
-          const enrichedPeople = await Promise.all(
-            batch.map(async (p) => {
-              let email = p.email || '';
-              const personId = p.id;
-              
-              // 如果没有直接邮箱，尝试通过 enrich 端点获取
-              if (!email && personId) {
-                try {
-                  const enrichResp = await fetch('https://api.apollo.io/v1/people/enrich', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'X-Api-Key': api_key
-                    },
-                    body: JSON.stringify({
-                      id: personId,
-                      first_name: p.first_name,
-                      last_name: p.last_name,
-                      organization_name: p.organization?.name || p.organization_name
-                    }),
-                    timeout: 5000
-                  });
-                  
-                  if (enrichResp.ok) {
-                    const enrichData = await enrichResp.json();
-                    email = enrichData.person?.email || '';
-                  }
-                } catch (err) {
-                  // 忽略 enrich 错误，继续使用基本数据
-                }
-              }
-              
-              return { ...p, email };
-            })
-          );
-          
-          // 处理获取后的数据
-          for (const p of enrichedPeople) {
-            if (contacts.length >= maxContacts) break;
+        // 处理每个联系人
+        for (const p of people) {
+          if (contacts.length >= maxContacts) break;
 
-            const companyName = (p.organization?.name || p.organization_name || '').trim();
-            const companyKey  = companyName.toLowerCase();
+          const companyName = (p.organization?.name || p.organization_name || '').trim();
+          const companyKey  = companyName.toLowerCase();
 
-            // 跳过重复公司
-            if (existingSet.has(companyKey)) { debug.filtered_by_duplicate++; continue; }
-            existingSet.add(companyKey);
+          // 跳过重复公司
+          if (existingSet.has(companyKey)) { debug.filtered_by_duplicate++; continue; }
+          existingSet.add(companyKey);
 
-            // 整理联系人信息
-            const email   = p.email || '';
-            const contact = [p.first_name, p.last_name].filter(Boolean).join(' ');
-            const title   = p.title || '';
-            const country = p.country || p.organization?.country || '';
-            const website = p.organization?.website_url || p.organization?.primary_domain || '';
+          // 整理联系人信息
+          const email   = p.email || '';
+          const contact = [p.first_name, p.last_name].filter(Boolean).join(' ');
+          const title   = p.title || '';
+          const country = p.country || p.organization?.country || '';
+          const website = p.organization?.website_url || p.organization?.primary_domain || '';
 
-            // 行业判断
-            const orgDesc = [
-              p.organization?.short_description || '',
-              p.organization?.industry || '',
-              title
-            ].join(' ').toLowerCase();
+          // 行业判断
+          const orgDesc = [
+            p.organization?.short_description || '',
+            p.organization?.industry || '',
+            title
+          ].join(' ').toLowerCase();
 
-            const industry = detectIndustry(orgDesc, kw);
-            const priority = detectPriority(title);
-            const region   = detectRegion(country);
+          const industry = detectIndustry(orgDesc, kw);
+          const priority = detectPriority(title);
+          const region   = detectRegion(country);
 
-            contacts.push({
-              company:     companyName || 'Unknown',
-              country,
-              region,
-              industry,
-              domain:      p.organization?.industry || '',
-              priority,
-              contact,
-              title,
-              email,
-              website:     website.replace(/^https?:\/\//, ''),
-              emailStatus: email ? 'new' : 'no_email'
-            });
-          }
+          contacts.push({
+            company:     companyName || 'Unknown',
+            country,
+            region,
+            industry,
+            domain:      p.organization?.industry || '',
+            priority,
+            contact,
+            title,
+            email,
+            website:     website.replace(/^https?:\/\//, ''),
+            emailStatus: email ? 'new' : 'no_email'
+          });
         }
       }
     }
