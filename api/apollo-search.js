@@ -1,4 +1,4 @@
-// apollo-search.js — 直川传感器意向客户搜索云函数（修复过滤问题）
+// apollo-search.js — 直川传感器意向客户搜索云函数（增强版，包含邮箱获取）
 // 部署到 Vercel，端点：/api/apollo-search
 
 export default async function handler(req, res) {
@@ -42,6 +42,7 @@ export default async function handler(req, res) {
       keywords_tried: [], 
       raw_people_count: 0, 
       filtered_by_competitor: 0,
+      enrich_results: [],
       api_responses: [] 
     };
 
@@ -113,38 +114,95 @@ export default async function handler(req, res) {
 
         if (people.length === 0) break; // 该关键词无更多结果
 
-        // 处理获取到的联系人
-        for (const p of people) {
-          if (contacts.length >= maxContacts) break;
-
-          const companyName = (p.organization?.name || p.organization_name || '').trim();
-          const email = p.email || '';
+        // ── 使用 enrich API 分批获取邮箱 ──
+        const batchSize = 5;
+        for (let i = 0; i < people.length && contacts.length < maxContacts; i += batchSize) {
+          const batch = people.slice(i, i + batchSize);
           
-          // 只收集有公司名称的联系人
-          if (companyName) {
-            contacts.push({
-              company: companyName,
-              country: p.country || p.organization?.country || '',
-              contact: [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown',
-              title: p.title || '',
-              email: email,
-              emailStatus: email ? 'new' : 'no_email',
-              website: p.organization?.website_url || p.organization?.primary_domain || '',
-              raw_person: {
-                id: p.id,
-                name: [p.first_name, p.last_name].filter(Boolean).join(' '),
-                linkedin_url: p.linkedin_url
+          // 并行调用 enrich API 获取邮箱
+          const enrichedBatch = await Promise.all(
+            batch.map(async (p) => {
+              let email = p.email || '';
+              let enrichSuccess = false;
+              
+              // 如果没有直接邮箱，尝试通过 enrich API 获取
+              if (!email && p.id) {
+                try {
+                  const enrichResp = await fetch('https://api.apollo.io/v1/people/enrich', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Api-Key': api_key
+                    },
+                    body: JSON.stringify({
+                      id: p.id,
+                      first_name: p.first_name,
+                      last_name: p.last_name,
+                      organization_name: p.organization?.name || p.organization_name,
+                      organization_domain: p.organization?.primary_domain || p.organization?.website_url || ''
+                    }),
+                    timeout: 10000
+                  });
+                  
+                  if (enrichResp.ok) {
+                    const enrichData = await enrichResp.json();
+                    email = enrichData.person?.email || '';
+                    enrichSuccess = !!email;
+                    debug.enrich_results.push({
+                      person_id: p.id,
+                      name: [p.first_name, p.last_name].filter(Boolean).join(' '),
+                      success: enrichSuccess,
+                      email_found: !!email
+                    });
+                  }
+                } catch (err) {
+                  console.warn(`[enrich] Failed for ${p.id}:`, err.message);
+                }
               }
-            });
+              
+              return { ...p, email, enrichSuccess };
+            })
+          );
+          
+          // 处理获取后的数据
+          for (const p of enrichedBatch) {
+            if (contacts.length >= maxContacts) break;
+
+            const companyName = (p.organization?.name || p.organization_name || '').trim();
+            const email = p.email || '';
+            
+            // 只收集有公司名称的联系人
+            if (companyName) {
+              contacts.push({
+                company: companyName,
+                country: p.country || p.organization?.country || '',
+                contact: [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown',
+                title: p.title || '',
+                email: email,
+                emailStatus: email ? 'new' : 'no_email',
+                website: p.organization?.website_url || p.organization?.primary_domain || '',
+                enrichSuccess: p.enrichSuccess,
+                raw_person: {
+                  id: p.id,
+                  name: [p.first_name, p.last_name].filter(Boolean).join(' '),
+                  linkedin_url: p.linkedin_url
+                }
+              });
+            }
           }
         }
       }
     }
 
+    // 统计有邮箱的客户数量
+    const withEmailCount = contacts.filter(c => c.email).length;
+    debug.with_email_count = withEmailCount;
+
     return res.status(200).json({
       success: true,
       contacts,
       total_found: contacts.length,
+      total_with_email: withEmailCount,
       total_requested: maxContacts,
       debug
     });
