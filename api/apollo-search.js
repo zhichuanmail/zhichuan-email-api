@@ -1,4 +1,4 @@
-// apollo-search.js — 直川传感器意向客户搜索云函数（简化版）
+// apollo-search.js — 直川传感器意向客户搜索云函数（修复过滤问题）
 // 部署到 Vercel，端点：/api/apollo-search
 
 export default async function handler(req, res) {
@@ -10,7 +10,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { api_key, keywords, num_contacts = 10, existing_companies = [] } = req.body;
+    const { api_key, keywords, num_contacts = 10 } = req.body;
 
     if (!api_key) {
       return res.status(400).json({ success: false, error: 'Missing api_key' });
@@ -35,38 +35,33 @@ export default async function handler(req, res) {
 
     const searchKeywords = userKeywords.length > 0 ? userKeywords : DEFAULT_KEYWORDS;
 
-    // 去重集合
-    const existingSet = new Set(
-      (existing_companies || []).map(n => (n || '').toLowerCase().trim())
-    );
-
     // 已收集的结果
     const contacts = [];
     const maxContacts = Math.min(parseInt(num_contacts) || 10, 50);
-    const debug = { pages_searched: 0, raw_people_count: 0, filtered_by_duplicate: 0, api_responses: [] };
+    const debug = { 
+      keywords_tried: [], 
+      raw_people_count: 0, 
+      filtered_by_competitor: 0,
+      api_responses: [] 
+    };
 
     // ── 轮流使用关键词搜索，直到凑够数量 ──
     for (let ki = 0; ki < searchKeywords.length && contacts.length < maxContacts; ki++) {
       const kw = searchKeywords[ki];
+      debug.keywords_tried.push(kw);
 
       for (let page = 1; page <= 3 && contacts.length < maxContacts; page++) {
         const perPage = Math.min(maxContacts - contacts.length + 5, 25);
 
-        // Apollo API 要求 api_key 必须放在 X-Api-Key 头部，不能放在 body 中
+        // **简化搜索参数 - 移除所有可能导致过滤的条件**
         const searchBody = {
           q_keywords: kw,
           page: page,
           per_page: perPage,
-          person_titles: [
-            'Procurement Manager', 'Purchasing Manager', 'Sourcing Manager',
-            'Technical Director', 'Engineering Manager', 'Project Manager',
-            'Operations Manager', 'Sales Director', 'Business Development',
-            'Chief Engineer', 'Senior Engineer', 'Instrumentation Engineer'
-          ],
-          // 增加一些常用筛选条件
+          // 移除 person_titles 过滤，让更多人能被找到
+          // 移除 contact_email_status 过滤，允许未验证邮箱
+          // 移除 person_seniorities 过滤，允许所有层级
           organization_locations: [], // 所有地区
-          contact_email_status: "verified", // 优先已验证邮箱
-          person_seniorities: ["senior", "director", "vp", "c_suite"]
         };
 
         let resp, respText;
@@ -77,9 +72,7 @@ export default async function handler(req, res) {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Cache-Control': 'no-cache',
               'Accept': 'application/json',
-              'User-Agent': 'ZhiChuan-Email-API/1.0',
               'X-Api-Key': api_key  // API Key 必须放在这里
             },
             body: JSON.stringify(searchBody),
@@ -91,7 +84,6 @@ export default async function handler(req, res) {
           break;
         }
 
-        debug.pages_searched++;
         debug.api_responses.push({
           keyword: kw, page,
           status: resp.status,
@@ -109,55 +101,42 @@ export default async function handler(req, res) {
         }
 
         let data;
-        try { data = JSON.parse(respText); } catch { break; }
+        try { 
+          data = JSON.parse(respText); 
+        } catch { 
+          break; 
+        }
 
         const people = data.people || data.contacts || [];
         debug.raw_people_count += people.length;
+        debug.filtered_by_competitor += (data.filtered_by_competitor || 0);
 
         if (people.length === 0) break; // 该关键词无更多结果
 
-        // 处理每个联系人
+        // 处理获取到的联系人
         for (const p of people) {
           if (contacts.length >= maxContacts) break;
 
           const companyName = (p.organization?.name || p.organization_name || '').trim();
-          const companyKey  = companyName.toLowerCase();
-
-          // 跳过重复公司
-          if (existingSet.has(companyKey)) { debug.filtered_by_duplicate++; continue; }
-          existingSet.add(companyKey);
-
-          // 整理联系人信息
-          const email   = p.email || '';
-          const contact = [p.first_name, p.last_name].filter(Boolean).join(' ');
-          const title   = p.title || '';
-          const country = p.country || p.organization?.country || '';
-          const website = p.organization?.website_url || p.organization?.primary_domain || '';
-
-          // 行业判断
-          const orgDesc = [
-            p.organization?.short_description || '',
-            p.organization?.industry || '',
-            title
-          ].join(' ').toLowerCase();
-
-          const industry = detectIndustry(orgDesc, kw);
-          const priority = detectPriority(title);
-          const region   = detectRegion(country);
-
-          contacts.push({
-            company:     companyName || 'Unknown',
-            country,
-            region,
-            industry,
-            domain:      p.organization?.industry || '',
-            priority,
-            contact,
-            title,
-            email,
-            website:     website.replace(/^https?:\/\//, ''),
-            emailStatus: email ? 'new' : 'no_email'
-          });
+          const email = p.email || '';
+          
+          // 只收集有公司名称的联系人
+          if (companyName) {
+            contacts.push({
+              company: companyName,
+              country: p.country || p.organization?.country || '',
+              contact: [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown',
+              title: p.title || '',
+              email: email,
+              emailStatus: email ? 'new' : 'no_email',
+              website: p.organization?.website_url || p.organization?.primary_domain || '',
+              raw_person: {
+                id: p.id,
+                name: [p.first_name, p.last_name].filter(Boolean).join(' '),
+                linkedin_url: p.linkedin_url
+              }
+            });
+          }
         }
       }
     }
@@ -165,6 +144,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       contacts,
+      total_found: contacts.length,
       total_requested: maxContacts,
       debug
     });
@@ -176,40 +156,4 @@ export default async function handler(req, res) {
       error: err.message || 'Internal server error'
     });
   }
-}
-
-// ── 工具函数 ──
-
-function detectIndustry(desc, keyword) {
-  const kw = (keyword + ' ' + desc).toLowerCase();
-  if (/geo|slope|settle|landslide|retaining|embankment|岩土/.test(kw)) return 'geotechnical';
-  if (/struct|bridge|shm|health monitor|dam|building monitor/.test(kw)) return 'structural';
-  if (/crane|excavat|drill|machinery|heavy equipment|construction machine/.test(kw)) return 'machinery';
-  if (/oil|gas|energy|petro|pipeline|wellhead|offshore energy/.test(kw)) return 'energy';
-  if (/mine|mining|quarry|pit/.test(kw)) return 'mining';
-  if (/marine|offshore|vessel|ship|port|harbor|ocean/.test(kw)) return 'marine';
-  if (/construct|civil|epc|contractor|building site/.test(kw)) return 'construction';
-  if (/infra|transport|rail|tunnel|road|highway|bridge/.test(kw)) return 'infrastructure';
-  return 'other';
-}
-
-function detectPriority(title) {
-  const t = (title || '').toLowerCase();
-  if (/director|chief|vp|vice president|head of|cto|ceo|founder/.test(t)) return 'high';
-  if (/senior|lead|principal|specialist/.test(t)) return 'medium';
-  return 'medium';
-}
-
-function detectRegion(country) {
-  const c = (country || '').toLowerCase();
-  if (/usa|united states|canada|mexico/.test(c)) return 'North America';
-  if (/uk|germany|france|netherlands|spain|italy|sweden|norway|denmark|finland|switzerland|austria|belgium|poland/.test(c)) return 'Europe';
-  if (/australia|new zealand/.test(c)) return 'Oceania';
-  if (/japan|korea|singapore|thailand|malaysia|indonesia|vietnam|philippines/.test(c)) return 'Asia Pacific';
-  if (/india|pakistan|bangladesh/.test(c)) return 'South Asia';
-  if (/brazil|argentina|chile|colombia|peru/.test(c)) return 'Latin America';
-  if (/south africa|nigeria|kenya|egypt/.test(c)) return 'Africa';
-  if (/middle east|uae|saudi|qatar|kuwait|oman|bahrain|israel|turkey/.test(c)) return 'Middle East';
-  if (/china|hong kong/.test(c)) return 'China';
-  return country || '';
 }
