@@ -1,4 +1,4 @@
-// apollo-search.js — 直川传感器意向客户搜索云函数（最终版：过滤无邮箱客户+完整字段）
+// apollo-search-sensor-users.js — 搜索使用倾角传感器的国外终端客户
 // 部署到 Vercel，端点：/api/apollo-search
 
 export default async function handler(req, res) {
@@ -10,227 +10,223 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { api_key, keywords, num_contacts = 10 } = req.body;
+    const { api_key, num_contacts = 10 } = req.body;
 
     if (!api_key) {
       return res.status(400).json({ success: false, error: 'Missing api_key' });
     }
 
-    // ── 内置搜索关键词（直川传感器相关行业） ──
-    const DEFAULT_KEYWORDS = [
-      'inclination sensor', 'tilt sensor', 'inclinometer', 'MEMS tilt sensor',
-      'angular displacement', 'draw wire sensor', 'wire rope displacement',
-      'string potentiometer', 'magnetic encoder', 'rotary encoder',
-      'vibration sensor', 'accelerometer monitoring',
-      'geotechnical monitoring', 'slope stability', 'bridge monitoring',
-      'tunnel monitoring', 'building monitoring', 'construction machinery',
-      'crane sensor', 'excavator monitoring'
+    // ── 使用倾角传感器的国外终端客户公司列表（非传感器制造商） ──
+    const SENSOR_USER_COMPANIES = [
+      // 岩土监测/边坡监测服务商
+      { name: 'Golder Associates', country: 'Canada', region: '北美', industry: '岩土监测', priority: 'high', website: 'golder.com', description: '岩土工程和监测服务' },
+      { name: 'Coffey International', country: 'Australia', region: '大洋洲', industry: '岩土监测', priority: 'medium', website: 'tetratech.com', description: '岩土工程咨询和监测' },
+      { name: 'Arup', country: 'UK', region: '欧洲', industry: '岩土监测', priority: 'high', website: 'arup.com', description: '工程设计和监测' },
+      
+      // 结构监测/SHM服务商
+      { name: 'Pure Technologies', country: 'Canada', region: '北美', industry: '结构监测', priority: 'high', website: 'puretechnologies.com', description: '基础设施结构健康监测' },
+      { name: 'Structural Monitoring Systems', country: 'Australia', region: '大洋洲', industry: '结构监测', priority: 'medium', website: 'sms-plc.com', description: '结构监测系统' },
+      { name: 'Mistras Group', country: 'USA', region: '北美', industry: '结构监测', priority: 'high', website: 'mistrasgroup.com', description: '无损检测和结构监测' },
+      
+      // 工程机械租赁/运营公司（使用传感器监测设备）
+      { name: 'United Rentals', country: 'USA', region: '北美', industry: '工程机械', priority: 'high', website: 'unitedrentals.com', description: '工程设备租赁公司' },
+      { name: 'Herc Rentals', country: 'USA', region: '北美', industry: '工程机械', priority: 'medium', website: 'hercrentals.com', description: '工程机械租赁' },
+      { name: 'Sunbelt Rentals', country: 'USA', region: '北美', industry: '工程机械', priority: 'medium', website: 'sunbeltrentals.com', description: '设备租赁服务' },
+      { name: 'Loxam', country: 'France', region: '欧洲', industry: '工程机械', priority: 'medium', website: 'loxam.com', description: '欧洲设备租赁公司' },
+      
+      // 基础设施运营商（需要监测桥梁、隧道等）
+      { name: 'Ferrovial', country: 'Spain', region: '欧洲', industry: '基础设施', priority: 'high', website: 'ferrovial.com', description: '基础设施管理和运营' },
+      { name: 'VINCI Highways', country: 'France', region: '欧洲', industry: '基础设施', priority: 'high', website: 'vinci.com', description: '高速公路运营和维护' },
+      { name: 'Transurban', country: 'Australia', region: '大洋洲', industry: '基础设施', priority: 'medium', website: 'transurban.com', description: '收费公路运营商' },
+      
+      // 建筑监测/房屋监测公司
+      { name: 'Bureau Veritas', country: 'France', region: '欧洲', industry: '建筑监测', priority: 'high', website: 'bureauveritas.com', description: '建筑检验和监测' },
+      { name: 'DNV GL', country: 'Norway', region: '欧洲', industry: '建筑监测', priority: 'high', website: 'dnvgl.com', description: '风险管理和认证' },
+      { name: 'SGS', country: 'Switzerland', region: '欧洲', industry: '建筑监测', priority: 'high', website: 'sgs.com', description: '检验、验证和监测' },
+      
+      // 矿山安全监测公司
+      { name: 'Maptek', country: 'Australia', region: '大洋洲', industry: '矿山监测', priority: 'medium', website: 'maptek.com', description: '矿山监测和测量' },
+      { name: 'Deswik', country: 'Australia', region: '大洋洲', industry: '矿山监测', priority: 'medium', website: 'deswik.com', description: '矿山工程软件和监测' },
+      
+      // 桥梁检测/监测公司
+      { name: 'Modjeski and Masters', country: 'USA', region: '北美', industry: '桥梁监测', priority: 'high', website: 'modjeski.com', description: '桥梁工程和监测' },
+      { name: 'HNTB Corporation', country: 'USA', region: '北美', industry: '桥梁监测', priority: 'medium', website: 'hntb.com', description: '基础设施工程和监测' },
+      
+      // 隧道监测公司
+      { name: 'Jacobs Engineering', country: 'USA', region: '北美', industry: '隧道监测', priority: 'high', website: 'jacobs.com', description: '隧道工程和监测' },
+      { name: 'Mott MacDonald', country: 'UK', region: '欧洲', industry: '隧道监测', priority: 'medium', website: 'mottmac.com', description: '隧道和地下工程监测' },
+      
+      // 物联网监测解决方案商
+      { name: 'Sierra Wireless', country: 'Canada', region: '北美', industry: '物联网监测', priority: 'high', website: 'sierrawireless.com', description: '物联网解决方案' },
+      { name: 'Telit', country: 'UK', region: '欧洲', industry: '物联网监测', priority: 'medium', website: 'telit.com', description: '物联网模块和解决方案' },
+      { name: 'u-blox', country: 'Switzerland', region: '欧洲', industry: '物联网监测', priority: 'medium', website: 'u-blox.com', description: '定位和无线通信模块' },
+      
+      // 风电监测公司（使用倾角传感器监测塔筒）
+      { name: 'Vestas', country: 'Denmark', region: '欧洲', industry: '风电监测', priority: 'high', website: 'vestas.com', description: '风力发电机制造和监测' },
+      { name: 'Siemens Gamesa', country: 'Spain', region: '欧洲', industry: '风电监测', priority: 'high', website: 'siemensgamesa.com', description: '风力发电机监测' },
+      
+      // 石油天然气设备监测
+      { name: 'Wood Group (formerly Amec Foster Wheeler)', country: 'UK', region: '欧洲', industry: '设备监测', priority: 'high', website: 'woodplc.com', description: '石油天然气设备监测' },
+      { name: 'Worley', country: 'Australia', region: '大洋洲', industry: '设备监测', priority: 'medium', website: 'worley.com', description: '能源设备工程和监测' },
+      
+      // 港口/码头设备监测
+      { name: 'DP World', country: 'UAE', region: '中东', industry: '港口监测', priority: 'high', website: 'dpworld.com', description: '港口设备运营和监测' },
+      { name: 'PSA International', country: 'Singapore', region: '亚太', industry: '港口监测', priority: 'medium', website: 'psa.com.sg', description: '港口运营和设备监测' },
+      
+      // 铁路监测公司
+      { name: 'Network Rail', country: 'UK', region: '欧洲', industry: '铁路监测', priority: 'high', website: 'networkrail.co.uk', description: '铁路基础设施监测' },
+      { name: 'SNCF Réseau', country: 'France', region: '欧洲', industry: '铁路监测', priority: 'medium', website: 'sncf-reseau.fr', description: '法国铁路网络监测' },
+      
+      // 大坝安全监测
+      { name: 'US Army Corps of Engineers', country: 'USA', region: '北美', industry: '大坝监测', priority: 'high', website: 'usace.army.mil', description: '大坝安全监测' },
+      { name: 'Hydro-Québec', country: 'Canada', region: '北美', industry: '大坝监测', priority: 'medium', website: 'hydroquebec.com', description: '水电设施监测' }
     ];
 
-    // 解析用户自定义关键词
-    const userKeywords = (keywords || '')
-      .split(',')
-      .map(k => k.trim())
-      .filter(k => k.length > 0);
+    // 随机选择目标数量的公司
+    const maxContacts = Math.min(parseInt(num_contacts) || 10, 30);
+    const shuffledCompanies = [...SENSOR_USER_COMPANIES].sort(() => Math.random() - 0.5);
+    const selectedCompanies = shuffledCompanies.slice(0, maxContacts);
 
-    const searchKeywords = userKeywords.length > 0 ? userKeywords : DEFAULT_KEYWORDS;
-
-    // 只收集有邮箱的客户
     const contacts = [];
-    const maxContacts = Math.min(parseInt(num_contacts) || 10, 50);
     const debug = { 
-      keywords_tried: [], 
-      raw_people_count: 0, 
-      filtered_by_competitor: 0,
-      enrich_results: [],
-      api_responses: [],
-      filtered_no_email: 0
+      companies_selected: selectedCompanies.map(c => ({name: c.name, industry: c.industry})),
+      api_calls: [],
+      enrich_calls: [],
+      found_with_email: 0
     };
 
-    // ── 轮流使用关键词搜索，直到凑够足够的有邮箱客户 ──
-    for (let ki = 0; ki < searchKeywords.length && contacts.length < maxContacts; ki++) {
-      const kw = searchKeywords[ki];
-      debug.keywords_tried.push(kw);
+    // ── 对每个公司调用 Apollo API 搜索联系人 ──
+    for (const company of selectedCompanies) {
+      if (contacts.length >= maxContacts) break;
 
-      for (let page = 1; page <= 5 && contacts.length < maxContacts; page++) { // 增加到5页
-        const perPage = Math.min((maxContacts - contacts.length) * 3, 25); // 搜索更多以确保找到有邮箱的
-
+      try {
+        // 搜索相关职位：采购、工程、技术、设备管理
         const searchBody = {
-          q_keywords: kw,
-          page: page,
-          per_page: perPage,
-          organization_locations: [],
+          q_organization_name: company.name,
+          page: 1,
+          per_page: 5,
+          person_titles: [
+            'Procurement Manager', 'Purchasing Manager', 'Sourcing Manager',
+            'Maintenance Manager', 'Equipment Manager', 'Technical Manager',
+            'Project Engineer', 'Field Engineer', 'Instrumentation Engineer',
+            'Engineering Manager', 'Operations Manager', 'Facility Manager',
+            'Asset Manager', 'Reliability Engineer', 'Monitoring Engineer'
+          ]
         };
 
-        let resp, respText;
-        try {
-          const apolloEndpoint = 'https://api.apollo.io/v1/mixed_people/api_search';
-          resp = await fetch(apolloEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-              'X-Api-Key': api_key
-            },
-            body: JSON.stringify(searchBody),
-            timeout: 15000
-          });
-          respText = await resp.text();
-        } catch (fetchErr) {
-          debug.api_responses.push({ keyword: kw, page, error: fetchErr.message });
-          break;
-        }
-
-        debug.api_responses.push({
-          keyword: kw, page,
-          status: resp.status,
-          body_preview: respText.substring(0, 200)
+        const resp = await fetch('https://api.apollo.io/v1/mixed_people/api_search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Api-Key': api_key
+          },
+          body: JSON.stringify(searchBody),
+          timeout: 10000
         });
 
-        if (resp.status === 401 || resp.status === 403) {
-          return res.status(200).json({
-            success: false,
-            error: 'Apollo API Key 无效或已过期，请检查 Key 是否正确',
-            apollo_error: `HTTP ${resp.status}`,
-            debug
-          });
-        }
+        const respText = await resp.text();
+        debug.api_calls.push({
+          company: company.name,
+          status: resp.status,
+          preview: respText.substring(0, 100)
+        });
+
+        if (!resp.ok) continue;
 
         let data;
         try { 
           data = JSON.parse(respText); 
         } catch { 
-          break; 
+          continue; 
         }
 
-        const people = data.people || data.contacts || [];
-        debug.raw_people_count += people.length;
-        debug.filtered_by_competitor += (data.filtered_by_competitor || 0);
+        const people = data.people || [];
+        
+        // 对每个找到的人尝试获取邮箱
+        for (const person of people.slice(0, 2)) {
+          if (contacts.length >= maxContacts) break;
 
-        if (people.length === 0) break;
-
-        // ── 使用 enrich API 分批获取邮箱，只保留有邮箱的客户 ──
-        const batchSize = 5;
-        for (let i = 0; i < people.length && contacts.length < maxContacts; i += batchSize) {
-          const batch = people.slice(i, i + batchSize);
+          let email = person.email || '';
           
-          const enrichedBatch = await Promise.all(
-            batch.map(async (p) => {
-              let email = p.email || '';
-              let enrichSuccess = false;
+          // 如果没有直接邮箱，尝试 enrich API
+          if (!email && person.id) {
+            try {
+              const enrichResp = await fetch('https://api.apollo.io/v1/people/enrich', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Api-Key': api_key
+                },
+                body: JSON.stringify({
+                  id: person.id,
+                  first_name: person.first_name,
+                  last_name: person.last_name,
+                  organization_name: company.name,
+                  organization_domain: company.website
+                }),
+                timeout: 8000
+              });
               
-              // 优先尝试 enrich API 获取邮箱
-              if (!email && p.id) {
-                try {
-                  const enrichResp = await fetch('https://api.apollo.io/v1/people/enrich', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'X-Api-Key': api_key
-                    },
-                    body: JSON.stringify({
-                      id: p.id,
-                      first_name: p.first_name,
-                      last_name: p.last_name,
-                      organization_name: p.organization?.name || p.organization_name,
-                      organization_domain: p.organization?.primary_domain || p.organization?.website_url || ''
-                    }),
-                    timeout: 10000
-                  });
-                  
-                  if (enrichResp.ok) {
-                    const enrichData = await enrichResp.json();
-                    email = enrichData.person?.email || '';
-                    enrichSuccess = !!email;
-                    debug.enrich_results.push({
-                      person_id: p.id,
-                      name: [p.first_name, p.last_name].filter(Boolean).join(' '),
-                      success: enrichSuccess,
-                      email_found: !!email
-                    });
-                  }
-                } catch (err) {
-                  console.warn(`[enrich] Failed for ${p.id}:`, err.message);
-                }
+              if (enrichResp.ok) {
+                const enrichData = await enrichResp.json();
+                email = enrichData.person?.email || '';
+                debug.enrich_calls.push({
+                  person_id: person.id,
+                  success: !!email
+                });
               }
-              
-              return { ...p, email, enrichSuccess };
-            })
-          );
-          
-          // 只处理有邮箱的客户
-          for (const p of enrichedBatch) {
-            const companyName = (p.organization?.name || p.organization_name || '').trim();
-            const email = p.email || '';
-            
-            if (!email) {
-              debug.filtered_no_email++;
-              continue; // 跳过无邮箱客户
+            } catch (err) {
+              console.warn(`[enrich] Failed for ${person.id}:`, err.message);
             }
+          }
+
+          // 如果有邮箱，添加到结果
+          if (email) {
+            const contactName = [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown';
             
-            if (contacts.length >= maxContacts) break;
-            
-            // ── 构建完整的客户信息 ──
-            const country = p.country || p.organization?.country || '';
-            const website = p.organization?.website_url || p.organization?.primary_domain || '';
-            const contactName = [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown';
-            
-            // 判断行业
-            const industry = detectIndustry(p, kw);
-            
-            // 判断优先级
-            const priority = detectPriority(p.title);
-            
-            // 判断地区
-            const region = detectRegion(country);
-            
-            // 判断邮箱质量
-            const emailQuality = checkEmailQuality(email, p.organization?.primary_domain || '');
-            
-            // 构建完整客户信息
             const customer = {
-              company: companyName,
-              country: country,
-              region: region,
-              industry: industry,
-              domain: p.organization?.industry || '传感器/自动化',
-              priority: priority,
+              company: company.name,
+              country: company.country,
+              region: company.region,
+              industry: company.industry,
+              domain: company.description,
+              priority: company.priority,
               contact: contactName,
-              title: p.title || '',
+              title: person.title || '',
               email: email,
-              website: website.replace(/^https?:\/\//, ''),
+              website: company.website,
               emailStatus: 'new',
-              emailQuality: emailQuality,
-              linkedinUrl: p.linkedin_url || '',
-              phone: p.phone_numbers?.[0] || '',
-              source: 'Apollo.io',
-              enrichSuccess: p.enrichSuccess,
-              raw_person: {
-                id: p.id,
-                name: contactName
+              emailQuality: checkEmailQuality(email, company.website),
+              linkedinUrl: person.linkedin_url || '',
+              phone: person.phone_numbers?.[0] || '',
+              source: 'Apollo.io (传感器用户搜索)',
+              description: company.description,
+              raw_company: {
+                name: company.name,
+                industry: company.industry
               }
             };
             
             contacts.push(customer);
+            debug.found_with_email++;
           }
         }
+      } catch (error) {
+        console.error(`[search] Failed for ${company.name}:`, error.message);
       }
     }
-
-    const withEmailCount = contacts.filter(c => c.email).length;
-    debug.with_email_count = withEmailCount;
 
     return res.status(200).json({
       success: true,
       contacts,
       total_found: contacts.length,
-      total_with_email: withEmailCount,
       total_requested: maxContacts,
       debug
     });
 
   } catch (err) {
-    console.error('[apollo-search] Error:', err);
+    console.error('[apollo-search-sensor-users] Error:', err);
     return res.status(500).json({
       success: false,
       error: err.message || 'Internal server error'
@@ -238,56 +234,9 @@ export default async function handler(req, res) {
   }
 }
 
-// ── 工具函数 ──
-
-function detectIndustry(person, keyword) {
-  const desc = [
-    person.organization?.short_description || '',
-    person.organization?.industry || '',
-    person.title || '',
-    keyword
-  ].join(' ').toLowerCase();
-  
-  if (/geo|slope|settle|landslide|retaining|embankment|岩土/.test(desc)) return '岩土监测';
-  if (/struct|bridge|shm|health monitor|dam|building monitor/.test(desc)) return '结构监测';
-  if (/crane|excavat|drill|machinery|heavy equipment|construction machine/.test(desc)) return '工程机械';
-  if (/oil|gas|energy|petro|pipeline|wellhead|offshore energy/.test(desc)) return '能源行业';
-  if (/mine|mining|quarry|pit/.test(desc)) return '矿山监测';
-  if (/marine|offshore|vessel|ship|port|harbor|ocean/.test(desc)) return '船舶海洋';
-  if (/construct|civil|epc|contractor|building site/.test(desc)) return '建筑工程';
-  if (/infra|transport|rail|tunnel|road|highway|bridge/.test(desc)) return '基础设施';
-  if (/auto|vehicle|car|truck/.test(desc)) return '汽车工业';
-  if (/robot|automation/.test(desc)) return '自动化';
-  if (/sensor|instrument|measurement/.test(desc)) return '传感器';
-  
-  return '制造业';
-}
-
-function detectPriority(title) {
-  const t = (title || '').toLowerCase();
-  if (/director|chief|vp|vice president|head of|cto|ceo|founder|总经理|总监|总裁/.test(t)) return 'high';
-  if (/senior|lead|principal|specialist|高级|主管|经理/.test(t)) return 'medium';
-  return 'medium';
-}
-
-function detectRegion(country) {
-  const c = (country || '').toLowerCase();
-  if (/usa|united states|canada|mexico/.test(c)) return '北美';
-  if (/uk|germany|france|netherlands|spain|italy|sweden|norway|denmark|finland|switzerland|austria|belgium|poland/.test(c)) return '欧洲';
-  if (/australia|new zealand/.test(c)) return '大洋洲';
-  if (/japan|korea|singapore|thailand|malaysia|indonesia|vietnam|philippines/.test(c)) return '亚太';
-  if (/india|pakistan|bangladesh/.test(c)) return '南亚';
-  if (/brazil|argentina|chile|colombia|peru/.test(c)) return '拉丁美洲';
-  if (/south africa|nigeria|kenya|egypt/.test(c)) return '非洲';
-  if (/middle east|uae|saudi|qatar|kuwait|oman|bahrain|israel|turkey/.test(c)) return '中东';
-  if (/china|hong kong|taiwan|macau|中国|台湾|香港|澳门/.test(c)) return '中国';
-  return country || '其他';
-}
-
 function checkEmailQuality(email, companyDomain) {
   if (!email) return 'unknown';
   
-  // 检查是否为通用邮箱
   const genericDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'qq.com', '163.com'];
   const emailDomain = email.split('@')[1] || '';
   
@@ -295,7 +244,6 @@ function checkEmailQuality(email, companyDomain) {
     return 'generic';
   }
   
-  // 检查是否匹配公司域名
   if (companyDomain && emailDomain.toLowerCase().includes(companyDomain.toLowerCase())) {
     return 'company';
   }
